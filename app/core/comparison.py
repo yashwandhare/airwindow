@@ -7,7 +7,7 @@ user baselines and scenario comparisons.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.core.exposure import (
     ExposureCalculationError,
@@ -80,9 +80,7 @@ def evaluate_baseline(
 
         if recommended_slot is not None and recommended_slot.dose_ug is not None:
             if baseline_dose > 0:
-                reduction_pct = round(
-                    ((baseline_dose - recommended_slot.dose_ug) / baseline_dose) * 100.0, 1
-                )
+                reduction_pct = round(((baseline_dose - recommended_slot.dose_ug) / baseline_dose) * 100.0, 1)
             elif baseline_dose == 0.0 and recommended_slot.dose_ug == 0.0:
                 reduction_pct = 0.0
             else:
@@ -104,7 +102,7 @@ def evaluate_baseline(
     except (ExposureCalculationError, ValueError) as e:
         return BaselineEvaluation(
             start=baseline_start,
-            end=baseline_start,
+            end=baseline_start + timedelta(minutes=duration_min),
             duration_min=duration_min,
             activity=activity,
             dose_ug=None,
@@ -128,12 +126,7 @@ def compare_scenarios(
     if modified_slot is None or modified_slot.dose_ug is None:
         warnings.append(f"{modified_label} has no valid recommendation.")
 
-    if (
-        base_slot is None
-        or base_slot.dose_ug is None
-        or modified_slot is None
-        or modified_slot.dose_ug is None
-    ):
+    if base_slot is None or base_slot.dose_ug is None or modified_slot is None or modified_slot.dose_ug is None:
         return WhatIfComparisonResult(
             base_slot=base_slot,
             modified_slot=modified_slot,

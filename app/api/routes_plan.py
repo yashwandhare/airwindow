@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, HTTPException
 
 from app.api.dependencies import ProviderDep
@@ -46,8 +48,9 @@ async def create_plan(
         end_time=request.window_end,
     )
 
-    # 2. Evaluate data quality and trust
-    data_quality = forecast_series.assess_quality(reference_time=request.window_start)
+    # 2. Evaluate data quality relative to current wall-clock time (not future window start)
+    current_time = datetime.now(UTC)
+    data_quality = forecast_series.assess_quality(reference_time=current_time)
 
     # 3. Run schedule optimizer across candidate slots
     opt_result = optimize_schedule(
@@ -72,36 +75,41 @@ async def create_plan(
         custom_rate_m3_min=request.custom_ventilation_rate_m3_min,
     )
 
-    # 5. Assemble candidate response items
-    candidate_responses: list[CandidateSlotResponse] = [
-        CandidateSlotResponse(
-            start=c.start,
-            end=c.end,
-            duration_min=c.duration_min,
-            dose_ug=c.dose_ug,
-            avg_pm25_ug_m3=c.avg_pm25_ug_m3,
-            avg_temperature_c=c.avg_temperature_c,
-            max_temperature_c=c.max_temperature_c,
-            is_valid=c.is_valid,
-            reason_invalid=c.reason_invalid,
-        )
-        for c in opt_result.candidates
-    ]
+    # 5. Assemble candidate response items (if requested)
+    candidate_responses: list[CandidateSlotResponse] = []
+    if request.include_candidates:
+        candidate_responses = [
+            CandidateSlotResponse(
+                start=c.start,
+                end=c.end,
+                duration_min=c.duration_min,
+                dose_ug=c.dose_ug,
+                avg_pm25_ug_m3=c.avg_pm25_ug_m3,
+                avg_temperature_c=c.avg_temperature_c,
+                max_temperature_c=c.max_temperature_c,
+                is_valid=c.is_valid,
+                reason_invalid=c.reason_invalid,
+            )
+            for c in opt_result.candidates
+        ]
 
     # 6. Assemble best recommendation item if available
     best_response: BestSlotResponse | None = None
     if opt_result.best is not None and opt_result.best.dose_ug is not None:
-        best_intervals = [
-            IntervalResponse(
-                start=inv.start,
-                end=inv.end,
-                duration_min=inv.duration_min,
-                pm25_ug_m3=inv.pm25_ug_m3,
-                dose_ug=inv.dose_ug,
-                temperature_c=inv.temperature_c,
-            )
-            for inv in opt_result.best.intervals
-        ]
+        best_intervals: list[IntervalResponse] = []
+        if request.include_intervals:
+            best_intervals = [
+                IntervalResponse(
+                    start=inv.start,
+                    end=inv.end,
+                    duration_min=inv.duration_min,
+                    pm25_ug_m3=inv.pm25_ug_m3,
+                    dose_ug=inv.dose_ug,
+                    temperature_c=inv.temperature_c,
+                )
+                for inv in opt_result.best.intervals
+            ]
+
         best_response = BestSlotResponse(
             start=opt_result.best.start,
             end=opt_result.best.end,
@@ -110,7 +118,7 @@ async def create_plan(
             dose_ug=opt_result.best.dose_ug,
             reduction_pct=baseline_eval.reduction_pct,
             confidence=data_quality.confidence,
-            avg_pm25_ug_m3=opt_result.best.avg_pm25_ug_m3 or 0.0,
+            avg_pm25_ug_m3=opt_result.best.avg_pm25_ug_m3,
             avg_temperature_c=opt_result.best.avg_temperature_c,
             max_temperature_c=opt_result.best.max_temperature_c,
             intervals=best_intervals,
@@ -131,16 +139,14 @@ async def create_plan(
     if baseline_eval.warning:
         all_warnings.append(baseline_eval.warning)
     if data_quality.is_stale:
-        all_warnings.append(
-            f"Forecast data source is over 24 hours old ({data_quality.freshness_seconds // 3600}h)."
-        )
+        all_warnings.append(f"Forecast data source is over 24 hours old ({data_quality.freshness_seconds // 3600}h).")
 
     return PlanResponse(
         status=opt_result.status,
         best=best_response,
         baseline=baseline_response,
         candidates=candidate_responses,
-        series=forecast_series.points,
+        series=forecast_series.points if request.include_series else [],
         data_quality=data_quality,
         warnings=all_warnings,
     )

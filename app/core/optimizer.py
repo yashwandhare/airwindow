@@ -98,9 +98,26 @@ def optimize_schedule(
             warnings=warnings,
         )
 
+    # Validate activity and ventilation rate up front to prevent unhandled errors
+    try:
+        from app.core.exposure import get_activity_ventilation_rate
+
+        get_activity_ventilation_rate(activity, custom_rate_m3_min)
+    except ValueError as e:
+        warnings.append(str(e))
+        return OptimizationResult(
+            status="no_recommendation",
+            best=None,
+            candidates=[],
+            total_candidates=0,
+            valid_candidates_count=0,
+            warnings=warnings,
+        )
+
     duration_delta = timedelta(minutes=duration_min)
     step_delta = timedelta(minutes=step_min)
     current_start = window_start
+    missing_temp_count = 0
 
     # Generate and evaluate candidate start times
     while current_start + duration_delta <= window_end:
@@ -127,10 +144,7 @@ def optimize_schedule(
                             f"exceeds constraint ({max_temperature_c}°C)"
                         )
                 else:
-                    warnings.append(
-                        f"Temperature constraint ({max_temperature_c}°C) requested but temperature data "
-                        f"unavailable for slot {current_start.isoformat()}."
-                    )
+                    missing_temp_count += 1
 
             if temp_exceeded:
                 candidates.append(
@@ -163,7 +177,7 @@ def optimize_schedule(
                     )
                 )
 
-        except ExposureCalculationError as e:
+        except (ExposureCalculationError, ValueError) as e:
             candidates.append(
                 CandidateSlot(
                     start=current_start,
@@ -180,6 +194,12 @@ def optimize_schedule(
             )
 
         current_start += step_delta
+
+    if missing_temp_count > 0:
+        warnings.append(
+            f"Temperature constraint ({max_temperature_c}°C) requested but temperature data was "
+            f"unavailable for {missing_temp_count} candidate slot(s)."
+        )
 
     valid_candidates = [c for c in candidates if c.is_valid and c.dose_ug is not None]
 

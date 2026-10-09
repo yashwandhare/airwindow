@@ -192,6 +192,8 @@ def calculate_slot_exposure(
     covered_minutes = 0.0
 
     temp_values: list[float] = []
+    temp_weighted_sum = 0.0
+    temp_covered_minutes = 0.0
     one_hour = timedelta(hours=1)
 
     # Sort points chronologically
@@ -222,6 +224,8 @@ def calculate_slot_exposure(
 
             if p.temperature_c is not None:
                 temp_values.append(p.temperature_c)
+                temp_weighted_sum += p.temperature_c * sub_min
+                temp_covered_minutes += sub_min
 
             intervals.append(
                 IntervalDetail(
@@ -243,7 +247,7 @@ def calculate_slot_exposure(
         )
 
     avg_pm25 = weighted_pm25_sum / duration_min
-    avg_temp = (sum(temp_values) / len(temp_values)) if temp_values else None
+    avg_temp = (temp_weighted_sum / temp_covered_minutes) if temp_covered_minutes > 0 else None
     max_temp = max(temp_values) if temp_values else None
 
     return SlotExposureResult(

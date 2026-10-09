@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class Location(BaseModel):
@@ -69,9 +69,7 @@ class ForecastDataQuality(BaseModel):
     generated_at: datetime = Field(..., description="Timestamp when the forecast was generated")
     freshness_seconds: int = Field(..., ge=0, description="Age of the forecast in seconds")
     is_stale: bool = Field(..., description="Whether the forecast is considered stale (> 24 hours)")
-    has_station_observations: bool = Field(
-        ..., description="Whether station observations are included"
-    )
+    has_station_observations: bool = Field(..., description="Whether station observations are included")
     missing_intervals_count: int = Field(default=0, description="Number of missing PM2.5 intervals")
     confidence: str = Field(
         ...,
@@ -101,6 +99,15 @@ class NormalizedForecastSeries(BaseModel):
     def sort_points(self) -> None:
         """Sort points chronologically in-place."""
         self.points.sort(key=lambda p: p.timestamp)
+
+    @model_validator(mode="after")
+    def sort_and_validate_points(self) -> NormalizedForecastSeries:
+        """Ensure points are sorted and reject duplicate timestamps."""
+        self.points.sort(key=lambda p: p.timestamp)
+        for i in range(len(self.points) - 1):
+            if self.points[i].timestamp == self.points[i + 1].timestamp:
+                raise ValueError(f"Duplicate forecast timestamp detected at {self.points[i].timestamp.isoformat()}.")
+        return self
 
     def get_points_in_range(self, start: datetime, end: datetime) -> list[NormalizedForecastPoint]:
         """Return points whose intervals overlap with [start, end].

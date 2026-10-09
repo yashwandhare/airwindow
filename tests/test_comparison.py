@@ -103,9 +103,7 @@ def test_baseline_zero_dose_safe_handling(test_location: Location, ist_tz: timez
     assert baseline.reduction_pct == 0.0
 
 
-def test_baseline_negative_reduction_not_falsified(
-    test_location: Location, ist_tz: timezone
-) -> None:
+def test_baseline_negative_reduction_not_falsified(test_location: Location, ist_tz: timezone) -> None:
     """Verify negative reduction is preserved when baseline is cleaner than recommendation."""
     # Baseline at 17:00 dose = 50.0 µg, recommended slot dose = 75.0 µg
     # Reduction = ((50 - 75) / 50) * 100 = -50.0%
@@ -136,9 +134,7 @@ def test_baseline_negative_reduction_not_falsified(
     assert baseline.reduction_pct < 0.0  # Must be negative, not clamped to 0
 
 
-def test_baseline_missing_data_handled_gracefully(
-    test_location: Location, ist_tz: timezone
-) -> None:
+def test_baseline_missing_data_handled_gracefully(test_location: Location, ist_tz: timezone) -> None:
     """Verify missing data at baseline produces invalid baseline result without crashing."""
     t17 = datetime(2026, 10, 10, 17, 0, tzinfo=ist_tz)
     series = make_series([(t17, None, 25.0)], test_location)
@@ -153,6 +149,8 @@ def test_baseline_missing_data_handled_gracefully(
     )
 
     assert baseline.is_valid is False
+    assert baseline.start == t17
+    assert baseline.end == t17 + timedelta(minutes=30)  # P1-1 fix: end == start + duration
     assert baseline.dose_ug is None
     assert baseline.reduction_pct is None
     assert baseline.warning is not None

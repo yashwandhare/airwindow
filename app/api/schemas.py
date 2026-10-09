@@ -8,10 +8,36 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core.exposure import ACTIVITY_PROFILES, EXPOSURE_DISCLAIMER
 from app.data.models import ForecastDataQuality, Location, NormalizedForecastPoint
+
+MAX_WINDOW_HOURS = 168  # 7 days max horizon
+MAX_CANDIDATE_SLOTS = 1000  # Cap on evaluated candidates
+
+
+def validate_activity_name(v: str | None) -> str | None:
+    """Validate activity against documented profiles."""
+    if v is None:
+        return None
+    key = v.strip().lower()
+    if key not in ACTIVITY_PROFILES:
+        supported = ", ".join(sorted(ACTIVITY_PROFILES.keys()))
+        raise ValueError(
+            f"Unsupported activity '{v}'. Supported activities are: {supported}. "
+            f"Or specify a custom_ventilation_rate_m3_min."
+        )
+    return key
+
+
+def validate_tz_aware(v: datetime | None) -> datetime | None:
+    """Validate that datetime is timezone-aware."""
+    if v is not None and (v.tzinfo is None or v.tzinfo.utcoffset(v) is None):
+        raise ValueError(
+            "Datetime must be timezone-aware (e.g., '2026-10-10T17:00:00+05:30' or '2026-10-10T17:00:00Z')."
+        )
+    return v
 
 
 class PlanRequest(BaseModel):
@@ -59,27 +85,56 @@ class PlanRequest(BaseModel):
         le=0.200,
         description="Optional override for breathing ventilation rate (m³/min)",
     )
+    include_candidates: bool = Field(
+        default=True,
+        description="Whether to include the full list of evaluated candidate slots in the response",
+    )
+    include_series: bool = Field(
+        default=True,
+        description="Whether to include the hourly forecast time-series in the response",
+    )
+    include_intervals: bool = Field(
+        default=True,
+        description="Whether to include the sub-interval dose breakdown in the best slot response",
+    )
 
     @field_validator("activity")
     @classmethod
-    def validate_activity(cls, v: str) -> str:
-        key = v.strip().lower()
-        if key not in ACTIVITY_PROFILES:
-            supported = ", ".join(sorted(ACTIVITY_PROFILES.keys()))
-            raise ValueError(
-                f"Unsupported activity '{v}'. Supported activities are: {supported}. "
-                f"Or specify a custom_ventilation_rate_m3_min."
-            )
-        return key
+    def check_activity(cls, v: str) -> str:
+        res = validate_activity_name(v)
+        assert res is not None
+        return res
 
     @field_validator("window_start", "window_end", "usual_time")
     @classmethod
-    def validate_tz(cls, v: datetime | None) -> datetime | None:
-        if v is not None and (v.tzinfo is None or v.tzinfo.utcoffset(v) is None):
+    def check_tz(cls, v: datetime | None) -> datetime | None:
+        return validate_tz_aware(v)
+
+    @model_validator(mode="after")
+    def validate_window_and_scale(self) -> PlanRequest:
+        if self.window_end <= self.window_start:
             raise ValueError(
-                "Datetime must be timezone-aware (e.g., '2026-10-10T17:00:00+05:30' or '2026-10-10T17:00:00Z')."
+                f"window_end ({self.window_end.isoformat()}) must be after window_start ({self.window_start.isoformat()})."
             )
-        return v
+
+        window_hours = (self.window_end - self.window_start).total_seconds() / 3600.0
+        if window_hours > MAX_WINDOW_HOURS:
+            raise ValueError(
+                f"Requested window ({window_hours:.1f} hours) exceeds the maximum allowed horizon of "
+                f"{MAX_WINDOW_HOURS} hours (7 days)."
+            )
+
+        window_minutes = (self.window_end - self.window_start).total_seconds() / 60.0
+        if window_minutes >= self.duration_min:
+            est_candidates = int((window_minutes - self.duration_min) / self.step_min) + 1
+            if est_candidates > MAX_CANDIDATE_SLOTS:
+                raise ValueError(
+                    f"Requested window and step_min generate ~{est_candidates} candidate slots, "
+                    f"exceeding the maximum allowed limit of {MAX_CANDIDATE_SLOTS}. "
+                    f"Please increase step_min or narrow the window."
+                )
+
+        return self
 
 
 class IntervalResponse(BaseModel):
@@ -138,12 +193,8 @@ class BaselineResponse(BaseModel):
 class PlanResponse(BaseModel):
     """Comprehensive plan response."""
 
-    status: str = Field(
-        ..., description="'ok' if recommendation found, 'no_recommendation' otherwise"
-    )
-    best: BestSlotResponse | None = Field(
-        default=None, description="Lowest-dose feasible time slot"
-    )
+    status: str = Field(..., description="'ok' if recommendation found, 'no_recommendation' otherwise")
+    best: BestSlotResponse | None = Field(default=None, description="Lowest-dose feasible time slot")
     baseline: BaselineResponse | None = Field(default=None, description="Evaluated baseline slot")
     candidates: list[CandidateSlotResponse] = Field(
         default_factory=list, description="All evaluated candidate slots for charting"
@@ -151,15 +202,9 @@ class PlanResponse(BaseModel):
     series: list[NormalizedForecastPoint] = Field(
         default_factory=list, description="Hourly forecast time-series for the window"
     )
-    data_quality: ForecastDataQuality = Field(
-        ..., description="Forecast freshness and confidence metadata"
-    )
-    warnings: list[str] = Field(
-        default_factory=list, description="Actionable warnings or boundary notices"
-    )
-    disclaimer: str = Field(
-        default=EXPOSURE_DISCLAIMER, description="Model explanation and non-medical disclaimer"
-    )
+    data_quality: ForecastDataQuality = Field(..., description="Forecast freshness and confidence metadata")
+    warnings: list[str] = Field(default_factory=list, description="Actionable warnings or boundary notices")
+    disclaimer: str = Field(default=EXPOSURE_DISCLAIMER, description="Model explanation and non-medical disclaimer")
 
 
 class PlanOverrides(BaseModel):
@@ -173,6 +218,16 @@ class PlanOverrides(BaseModel):
     max_temperature_c: float | None = None
     step_min: int | None = Field(default=None, ge=5, le=60)
 
+    @field_validator("activity")
+    @classmethod
+    def check_override_activity(cls, v: str | None) -> str | None:
+        return validate_activity_name(v)
+
+    @field_validator("window_start", "window_end", "usual_time")
+    @classmethod
+    def check_override_tz(cls, v: datetime | None) -> datetime | None:
+        return validate_tz_aware(v)
+
 
 class WhatIfRequest(BaseModel):
     """What-if scenario comparison request."""
@@ -180,6 +235,14 @@ class WhatIfRequest(BaseModel):
     base_plan: PlanRequest
     modified_plan: PlanRequest | None = None
     overrides: PlanOverrides | None = None
+
+    @model_validator(mode="after")
+    def validate_whatif_sources(self) -> WhatIfRequest:
+        if self.modified_plan is not None and self.overrides is not None:
+            raise ValueError("Provide either 'modified_plan' or 'overrides', but not both.")
+        if self.modified_plan is None and self.overrides is None:
+            raise ValueError("Either 'modified_plan' or 'overrides' must be provided in what-if request.")
+        return self
 
 
 class WhatIfResponse(BaseModel):

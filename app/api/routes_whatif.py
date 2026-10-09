@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, HTTPException
 
 from app.api.dependencies import ProviderDep
 from app.api.schemas import (
     BestSlotResponse,
+    IntervalResponse,
     PlanRequest,
     WhatIfRequest,
     WhatIfResponse,
@@ -84,6 +87,11 @@ async def evaluate_whatif(
             end_time=modified_plan.window_end,
         )
 
+    # Assess quality for both series against current wall-clock time
+    now_utc = datetime.now(UTC)
+    base_quality = base_series.assess_quality(reference_time=now_utc)
+    mod_quality = modified_series.assess_quality(reference_time=now_utc)
+
     # Optimize both
     base_opt = optimize_schedule(
         window_start=base_plan.window_start,
@@ -118,6 +126,17 @@ async def evaluate_whatif(
     # Format response recommendations
     base_resp: BestSlotResponse | None = None
     if base_opt.best is not None and base_opt.best.dose_ug is not None:
+        base_intervals = [
+            IntervalResponse(
+                start=inv.start,
+                end=inv.end,
+                duration_min=inv.duration_min,
+                pm25_ug_m3=inv.pm25_ug_m3,
+                dose_ug=inv.dose_ug,
+                temperature_c=inv.temperature_c,
+            )
+            for inv in base_opt.best.intervals
+        ]
         base_resp = BestSlotResponse(
             start=base_opt.best.start,
             end=base_opt.best.end,
@@ -125,15 +144,26 @@ async def evaluate_whatif(
             activity=base_plan.activity,
             dose_ug=base_opt.best.dose_ug,
             reduction_pct=None,
-            confidence="high",
-            avg_pm25_ug_m3=base_opt.best.avg_pm25_ug_m3 or 0.0,
+            confidence=base_quality.confidence,
+            avg_pm25_ug_m3=base_opt.best.avg_pm25_ug_m3,
             avg_temperature_c=base_opt.best.avg_temperature_c,
             max_temperature_c=base_opt.best.max_temperature_c,
-            intervals=[],
+            intervals=base_intervals,
         )
 
     mod_resp: BestSlotResponse | None = None
     if modified_opt.best is not None and modified_opt.best.dose_ug is not None:
+        mod_intervals = [
+            IntervalResponse(
+                start=inv.start,
+                end=inv.end,
+                duration_min=inv.duration_min,
+                pm25_ug_m3=inv.pm25_ug_m3,
+                dose_ug=inv.dose_ug,
+                temperature_c=inv.temperature_c,
+            )
+            for inv in modified_opt.best.intervals
+        ]
         mod_resp = BestSlotResponse(
             start=modified_opt.best.start,
             end=modified_opt.best.end,
@@ -141,18 +171,16 @@ async def evaluate_whatif(
             activity=modified_plan.activity,
             dose_ug=modified_opt.best.dose_ug,
             reduction_pct=comparison.reduction_pct,
-            confidence="high",
-            avg_pm25_ug_m3=modified_opt.best.avg_pm25_ug_m3 or 0.0,
+            confidence=mod_quality.confidence,
+            avg_pm25_ug_m3=modified_opt.best.avg_pm25_ug_m3,
             avg_temperature_c=modified_opt.best.avg_temperature_c,
             max_temperature_c=modified_opt.best.max_temperature_c,
-            intervals=[],
+            intervals=mod_intervals,
         )
 
     all_warnings = list(base_opt.warnings) + list(modified_opt.warnings) + list(comparison.warnings)
 
-    overall_status = (
-        "ok" if (base_opt.status == "ok" and modified_opt.status == "ok") else "no_recommendation"
-    )
+    overall_status = "ok" if (base_opt.status == "ok" and modified_opt.status == "ok") else "no_recommendation"
 
     return WhatIfResponse(
         status=overall_status,

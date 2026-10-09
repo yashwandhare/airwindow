@@ -50,10 +50,13 @@ Evaluates candidate 15-minute start time slots within an available window to fin
 #### Key Fields:
 - `activity` *(string, required)*: `resting`, `walking`, `cycling`, `running`, `sports`, `outdoor_work`.
 - `duration_min` *(int, required)*: Continuous duration in minutes (5 to 360).
-- `window_start` / `window_end` *(ISO 8601 string, required)*: Timezone-aware window bounds.
+- `window_start` / `window_end` *(ISO 8601 string, required)*: Timezone-aware window bounds (max 168 hours / 7 days).
 - `usual_time` *(ISO 8601 string, optional)*: User's habitual start time for baseline comparison.
 - `max_temperature_c` *(float, optional)*: Maximum allowable temperature in °C.
-- `step_min` *(int, optional, default: 15)*: Evaluation stepping granularity.
+- `step_min` *(int, optional, default: 15)*: Evaluation stepping granularity (max 1,000 candidate slots per request).
+- `include_candidates` *(bool, optional, default: true)*: Include candidate slots list in response.
+- `include_series` *(bool, optional, default: true)*: Include hourly forecast series points in response.
+- `include_intervals` *(bool, optional, default: true)*: Include sub-interval exposure breakdown in recommended slot.
 
 #### Response `200 OK`
 ```json

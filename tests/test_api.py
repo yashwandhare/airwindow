@@ -160,3 +160,114 @@ def test_get_forecast_trust() -> None:
     assert "confidence_reason" in data
     assert data["is_stale"] is False
     assert "disclaimer" in data
+
+
+def test_plan_future_window_not_stale() -> None:
+    """Verify future planning window (e.g. +48h) is not falsely marked stale (P0-1 fix)."""
+    now = datetime.now(IST)
+    t_start = now + timedelta(days=2)
+    t_end = t_start + timedelta(hours=4)
+
+    payload = {
+        "location": {"name": "Nagpur", "latitude": 21.1458, "longitude": 79.0882},
+        "activity": "running",
+        "duration_min": 30,
+        "window_start": t_start.isoformat(),
+        "window_end": t_end.isoformat(),
+    }
+
+    response = client.post("/plan", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["data_quality"]["is_stale"] is False
+    assert not any("over 24 hours old" in w for w in data["warnings"])
+
+
+def test_overrides_invalid_activity_returns_422() -> None:
+    """Verify invalid activity in PlanOverrides returns 422, not 500 (P0-3 fix)."""
+    t_start = datetime(2026, 10, 10, 17, 0, tzinfo=IST)
+    t_end = datetime(2026, 10, 10, 21, 0, tzinfo=IST)
+
+    payload = {
+        "base_plan": {
+            "location": {"name": "Nagpur", "latitude": 21.1458, "longitude": 79.0882},
+            "activity": "running",
+            "duration_min": 30,
+            "window_start": t_start.isoformat(),
+            "window_end": t_end.isoformat(),
+        },
+        "overrides": {
+            "activity": "skydiving_not_supported",
+        },
+    }
+
+    response = client.post("/whatif", json=payload)
+    assert response.status_code == 422
+
+
+def test_plan_window_cap_422() -> None:
+    """Verify window exceeding 168 hours returns 422 (P0-5 fix)."""
+    t_start = datetime(2026, 10, 10, 17, 0, tzinfo=IST)
+    t_end = t_start + timedelta(days=8)  # 192 hours > 168h limit
+
+    payload = {
+        "location": {"name": "Nagpur", "latitude": 21.1458, "longitude": 79.0882},
+        "activity": "running",
+        "duration_min": 30,
+        "window_start": t_start.isoformat(),
+        "window_end": t_end.isoformat(),
+    }
+
+    response = client.post("/plan", json=payload)
+    assert response.status_code == 422
+    assert "exceeds the maximum allowed horizon" in response.text
+
+
+def test_plan_payload_trim_flags() -> None:
+    """Verify include_candidates=False and include_series=False trim response payload (P0-5 fix)."""
+    t_start = datetime(2026, 10, 10, 17, 0, tzinfo=IST)
+    t_end = datetime(2026, 10, 10, 20, 0, tzinfo=IST)
+
+    payload = {
+        "location": {"name": "Nagpur", "latitude": 21.1458, "longitude": 79.0882},
+        "activity": "running",
+        "duration_min": 30,
+        "window_start": t_start.isoformat(),
+        "window_end": t_end.isoformat(),
+        "include_candidates": False,
+        "include_series": False,
+        "include_intervals": False,
+    }
+
+    response = client.post("/plan", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["candidates"] == []
+    assert data["series"] == []
+    assert data["best"]["intervals"] == []
+
+
+def test_whatif_both_overrides_and_modified_plan_rejected_422() -> None:
+    """Verify providing both modified_plan and overrides returns 422 (P2-3 fix)."""
+    t_start = datetime(2026, 10, 10, 17, 0, tzinfo=IST)
+    t_end = datetime(2026, 10, 10, 20, 0, tzinfo=IST)
+
+    base = {
+        "location": {"name": "Nagpur", "latitude": 21.1458, "longitude": 79.0882},
+        "activity": "running",
+        "duration_min": 30,
+        "window_start": t_start.isoformat(),
+        "window_end": t_end.isoformat(),
+    }
+
+    payload = {
+        "base_plan": base,
+        "modified_plan": base,
+        "overrides": {"activity": "walking"},
+    }
+
+    response = client.post("/whatif", json=payload)
+    assert response.status_code == 422
+    assert "not both" in response.text

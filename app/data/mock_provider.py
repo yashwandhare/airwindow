@@ -22,13 +22,18 @@ class MockForecastProvider(ForecastProvider):
         base_temp_c: float = 27.0,
         stale_hours: float = 0.0,
         missing_hours: set[int] | None = None,
+        missing_wall_hours: set[int] | None = None,
+        missing_indices: set[int] | None = None,
         has_station_observations: bool = False,
     ) -> None:
         self._name = "AirWindow Deterministic Mock Provider v1.0"
         self.base_pm25 = base_pm25
         self.base_temp_c = base_temp_c
         self.stale_hours = stale_hours
-        self.missing_hours = missing_hours or set()
+        # Explicit distinction: missing_wall_hours refers to clock hour (0-23),
+        # missing_indices refers to sequential sequence indices (0, 1, 2...)
+        self.missing_wall_hours = missing_wall_hours if missing_wall_hours is not None else (missing_hours or set())
+        self.missing_indices = missing_indices or set()
         self.has_station_observations = has_station_observations
 
     @property
@@ -83,17 +88,28 @@ class MockForecastProvider(ForecastProvider):
 
         # Floor start_time to the beginning of the hour
         current = start_time.replace(minute=0, second=0, microsecond=0)
-        # Ceiling end_time to ensure full hour coverage
-        limit = end_time.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+
+        # Each point at T covers [T, T + 1hr).
+        # If end_time falls exactly on the hour boundary (e.g. 21:00),
+        # the point starting at 20:00 covers [20:00, 21:00).
+        # If end_time has non-zero minutes/seconds (e.g. 21:15), limit is 22:00.
+        if end_time.minute > 0 or end_time.second > 0 or end_time.microsecond > 0:
+            limit = end_time.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        else:
+            limit = end_time.replace(minute=0, second=0, microsecond=0)
+
+        # Always generate at least one hour point
+        if limit <= current:
+            limit = current + timedelta(hours=1)
 
         points: list[NormalizedForecastPoint] = []
         hour_index = 0
 
-        while current <= limit:
+        while current < limit:
             pm25, temp_c, humidity = self._calculate_point(current)
 
-            # Check if this hour is designated as missing
-            if hour_index in self.missing_hours or current.hour in self.missing_hours:
+            # Check if this hour is designated as missing (either by sequence index or wall hour)
+            if hour_index in self.missing_indices or current.hour in self.missing_wall_hours:
                 point_pm25 = None
             else:
                 point_pm25 = pm25

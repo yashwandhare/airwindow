@@ -167,3 +167,23 @@ def test_timezone_naive_timestamp_rejected(test_location: Location) -> None:
             activity="running",
             forecast_series=series,
         )
+
+
+def test_temperature_time_weighted(test_location: Location, ist_tz: timezone) -> None:
+    """Verify that average temperature is time-weighted across sub-intervals (P1-2 fix)."""
+    # 45 min at 30.0°C and 15 min at 20.0°C -> time-weighted average is 27.5°C
+    t17 = datetime(2026, 10, 10, 17, 0, tzinfo=ist_tz)
+    t18 = datetime(2026, 10, 10, 18, 0, tzinfo=ist_tz)
+    series = create_series([(t17, 40.0, 30.0), (t18, 40.0, 20.0)], test_location)
+
+    start = datetime(2026, 10, 10, 17, 15, tzinfo=ist_tz)
+    result = calculate_slot_exposure(
+        start_time=start,
+        duration_min=60,
+        activity="running",
+        forecast_series=series,
+    )
+
+    # 45m * 30 + 15m * 20 = 1350 + 300 = 1650 / 60 = 27.5°C
+    assert result.avg_temperature_c == pytest.approx(27.5, rel=1e-2)
+    assert result.max_temperature_c == 30.0

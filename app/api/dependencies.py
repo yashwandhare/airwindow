@@ -21,11 +21,13 @@ def get_forecast_provider() -> ForecastProvider:
     """Dependency provider returning the configured ForecastProvider implementation."""
     global _provider_instance
     if _provider_instance is None:
-        if settings.forecast_provider == "mock":
+        p_name = settings.forecast_provider.strip().lower()
+        if p_name == "mock":
             _provider_instance = MockForecastProvider()
         else:
-            # Fallback to mock provider
-            _provider_instance = MockForecastProvider()
+            raise RuntimeError(
+                f"Unsupported FORECAST_PROVIDER: '{settings.forecast_provider}'. Supported options: 'mock'."
+            )
     return _provider_instance
 
 

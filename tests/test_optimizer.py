@@ -149,9 +149,7 @@ def test_optimizer_temperature_constraint(test_location: Location, ist_tz: timez
     assert "exceeds constraint" in (res.candidates[0].reason_invalid or "")
 
 
-def test_optimizer_handles_missing_pm25_candidate(
-    test_location: Location, ist_tz: timezone
-) -> None:
+def test_optimizer_handles_missing_pm25_candidate(test_location: Location, ist_tz: timezone) -> None:
     """Verify candidate with missing PM2.5 is marked invalid, while valid ones are kept."""
     # Hour 17: PM2.5=None (missing)
     # Hour 18: PM2.5=35.0
@@ -197,3 +195,45 @@ def test_optimizer_tie_breaking_earlier_start(test_location: Location, ist_tz: t
     assert res.best is not None
     # Both have same dose, tie-breaker picks earlier slot (17:00)
     assert res.best.start == t17
+
+
+def test_optimizer_invalid_activity_no_crash(test_location: Location, ist_tz: timezone) -> None:
+    """Verify unsupported activity returns no_recommendation without crashing (P0-4 fix)."""
+    t17 = datetime(2026, 10, 10, 17, 0, tzinfo=ist_tz)
+    t19 = datetime(2026, 10, 10, 19, 0, tzinfo=ist_tz)
+    series = make_series([(t17, 40.0, 25.0), (t19, 40.0, 25.0)], test_location)
+
+    res = optimize_schedule(
+        window_start=t17,
+        window_end=t19,
+        duration_min=60,
+        activity="skydiving_not_supported",
+        forecast_series=series,
+    )
+
+    assert res.status == "no_recommendation"
+    assert res.best is None
+    assert any("Unsupported activity" in w for w in res.warnings)
+
+
+def test_temp_warning_single(test_location: Location, ist_tz: timezone) -> None:
+    """Verify missing temperature data produces a single consolidated warning, not spam (P1-3 fix)."""
+    t17 = datetime(2026, 10, 10, 17, 0, tzinfo=ist_tz)
+    t18 = datetime(2026, 10, 10, 18, 0, tzinfo=ist_tz)
+    t19 = datetime(2026, 10, 10, 19, 0, tzinfo=ist_tz)
+    # Temperature is None for all points
+    series = make_series([(t17, 40.0, None), (t18, 30.0, None)], test_location)
+
+    res = optimize_schedule(
+        window_start=t17,
+        window_end=t19,
+        duration_min=30,
+        activity="running",
+        forecast_series=series,
+        step_min=15,
+        max_temperature_c=30.0,
+    )
+
+    temp_warnings = [w for w in res.warnings if "Temperature constraint" in w]
+    assert len(temp_warnings) == 1
+    assert "unavailable for" in temp_warnings[0]

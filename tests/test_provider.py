@@ -92,3 +92,39 @@ def test_normalize_open_meteo_payload(location: Location) -> None:
     assert series.points[0].pm25_ug_m3 == 45.0
     assert series.points[1].pm25_ug_m3 == 55.0
     assert series.points[0].timestamp.tzinfo is not None
+
+
+@pytest.mark.anyio
+async def test_mock_point_count(location: Location, ist_tz: timezone) -> None:
+    """Verify [17:00, 21:00] generates exactly 4 points: 17, 18, 19, 20 (P1-4 fix)."""
+    provider = MockForecastProvider()
+    t_start = datetime(2026, 10, 10, 17, 0, tzinfo=ist_tz)
+    t_end = datetime(2026, 10, 10, 21, 0, tzinfo=ist_tz)
+
+    series = await provider.get_forecast(location, t_start, t_end)
+    assert len(series.points) == 4
+    assert [p.timestamp.hour for p in series.points] == [17, 18, 19, 20]
+
+
+def test_normalize_negative_pm25_clamped(location: Location) -> None:
+    """Verify negative sensor values are clamped to 0.0 (P1-9 fix)."""
+    from app.data.normalization import normalize_open_meteo_response
+
+    raw_payload = {
+        "hourly": {
+            "time": ["2026-10-10T17:00"],
+            "pm2_5": [-5.2],
+            "temperature_2m": [25.0],
+        },
+    }
+
+    series = normalize_open_meteo_response(raw_payload, location)
+    assert series.points[0].pm25_ug_m3 == 0.0
+
+
+def test_normalize_zulu_time(location: Location) -> None:
+    """Verify ISO strings ending in 'Z' parse without error (P1-9 fix)."""
+    from app.data.normalization import parse_iso_datetime
+
+    dt = parse_iso_datetime("2026-10-10T17:00:00Z")
+    assert dt.tzinfo is not None

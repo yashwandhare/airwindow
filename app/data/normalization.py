@@ -14,7 +14,11 @@ from app.data.models import Location, NormalizedForecastPoint, NormalizedForecas
 
 def parse_iso_datetime(dt_str: str, default_tz: timezone | ZoneInfo = UTC) -> datetime:
     """Parse ISO datetime string ensuring a timezone is attached."""
-    dt = datetime.fromisoformat(dt_str)
+    clean_str = dt_str.strip()
+    if clean_str.endswith("Z"):
+        clean_str = clean_str[:-1] + "+00:00"
+
+    dt = datetime.fromisoformat(clean_str)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=default_tz)
     return dt
@@ -49,14 +53,17 @@ def normalize_open_meteo_response(
     points: list[NormalizedForecastPoint] = []
     for i, t_str in enumerate(times):
         dt = parse_iso_datetime(t_str, default_tz=tz)
-        pm = pm25_list[i] if i < len(pm25_list) else None
-        temp = temp_list[i] if i < len(temp_list) else None
-        humidity = humidity_list[i] if i < len(humidity_list) else None
+        raw_pm = pm25_list[i] if i < len(pm25_list) else None
+
+        # Clamp negative sensor/model values to 0.0
+        pm = max(0.0, float(raw_pm)) if raw_pm is not None else None
+        temp = float(temp_list[i]) if (i < len(temp_list) and temp_list[i] is not None) else None
+        humidity = float(humidity_list[i]) if (i < len(humidity_list) and humidity_list[i] is not None) else None
 
         points.append(
             NormalizedForecastPoint(
                 timestamp=dt,
-                pm25_ug_m3=pm if pm is not None else None,
+                pm25_ug_m3=pm,
                 temperature_c=temp,
                 humidity_pct=humidity,
                 source=source_name,

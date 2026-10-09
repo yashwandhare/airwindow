@@ -55,7 +55,7 @@ Where:
 - $\Delta t_i$: Duration in minutes spent in that atmospheric interval.
 
 ### Standard Physiological Assumptions
-Minute ventilation rates are documented in [`app/core/exposure.py`](file:///home/kazuto/dev/airwindow/app/core/exposure.py) based on peer-reviewed literature (US EPA Exposure Factors Handbook 2011 Table 6-1; Adams 1993; Zuurbier et al. 2009):
+Minute ventilation rates are documented in [`app/core/exposure.py`](../app/core/exposure.py) based on peer-reviewed literature (US EPA Exposure Factors Handbook 2011 Table 6-1; Adams 1993; Zuurbier et al. 2009):
 - **`resting`**: $0.007\text{ m}^3/\text{min}$ ($7.0\text{ L/min}$) --- Sedentary / passive seated.
 - **`walking`**: $0.016\text{ m}^3/\text{min}$ ($16.0\text{ L/min}$) --- Light exercise, brisk walk.
 - **`outdoor_work`**: $0.025\text{ m}^3/\text{min}$ ($25.0\text{ L/min}$) --- Moderate manual labor / gardening.
